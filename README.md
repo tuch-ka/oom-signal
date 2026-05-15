@@ -79,6 +79,41 @@ def on_starting(server):
     subprocess.Popen(["oom-signal"])
 ```
 
+## Использование в своём проекте
+
+Образ опубликован в GitHub Container Registry: `ghcr.io/tuch-ka/oom-signal`
+
+Для использования добавь в Dockerfile своего проекта:
+
+**Python:**
+
+```dockerfile
+FROM python:3.12-slim
+
+COPY --from=ghcr.io/tuch-ka/oom-signal:main /oom-signal /usr/local/bin/oom-signal
+
+COPY . /app
+WORKDIR /app
+```
+
+**Go:**
+
+```dockerfile
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY . .
+RUN go build -o /myapp ./cmd
+
+FROM alpine:3.21
+
+COPY --from=ghcr.io/tuch-ka/oom-signal:main /oom-signal /usr/local/bin/oom-signal
+
+COPY --from=build /myapp /myapp
+ENTRYPOINT ["/myapp"]
+```
+
+Для продакшна используй семантические теги (`1.0.0`) вместо `main`.
+
 ## Как работает
 
 1. При запуске определяет версию cgroup (v1 или v2) и пути к файлам памяти один раз.
