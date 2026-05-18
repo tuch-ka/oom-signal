@@ -14,6 +14,7 @@
 ```bash
 make test-threads       # потоки (ThreadPoolExecutor)
 make test-processes     # процессы (ProcessPoolExecutor)
+make test-burst         # тест динамического интервала
 ```
 
 ### Параметры
@@ -40,12 +41,22 @@ MEMORY_LIMIT=256m MEMORY_STEP=32 WORKERS=2 make test-threads
 
 Воркеры (по умолчанию 4) выделяют память, каждый со своим RSS. Cgroup usage — сумма всех процессов в контейнере. При достижении 80% от лимита приходит SIGUSR1 в PID 1 (основной процесс).
 
+### burst (динамический интервал)
+
+Тест проверяет, что динамический интервал опроса срабатывает при резком росте потребления памяти:
+
+1. Аллоцирует память до ~60% лимита (стабильный уровень, монитор на дефолтном интервале)
+2. Делает резкую burst-аллокацию, пересекая порог 80%
+3. Замеряет задержку от начала burst до получения SIGUSR1 (должна быть < 200ms)
+4. Проверяет в stderr лог смены интервала (`poll interval: ... → ...`)
+
 ## Ожидаемый результат
 
 В логах контейнера должна быть следующая цепочка событий:
 
 ```
-[oom-signal] starting: threshold=0.80 poll-interval=100ms pid=1 signal=SIGUSR1 reader=cgroup v2
+[oom-signal] starting: threshold=0.80 pid=1 signal=SIGUSR1 reader=cgroup v2
+[oom-signal] poll interval: 100ms → 1ms
 [oom-signal] memory threshold exceeded: usage 434974720 / limit 536870912 (free 101896192 bytes, threshold 80%)
 [oom-signal] signal sent to pid 1
 Received SIGUSR1 from oom-signal
@@ -60,6 +71,7 @@ Received SIGUSR1 from oom-signal
 | Файл | Назначение |
 |------|-----------|
 | `eat_memory.py` | Python-скрипт: запуск oom-signal, обработка SIGUSR1, постепенное выделение памяти |
+| `burst_test.py` | Python-скрипт: тест динамического интервала (burst-аллокация, замер задержки) |
 | `Dockerfile` | Multi-stage build: сборка Go-бинарника + Python-окружение |
 
 ## Сборка вручную
@@ -68,4 +80,5 @@ Received SIGUSR1 from oom-signal
 docker build -t oom-signal-test -f test/Dockerfile .
 docker run --rm --memory=512m oom-signal-test threads --step 64 --workers 4
 docker run --rm --memory=512m oom-signal-test processes --step 64 --workers 4
+docker run --rm --memory=512m --entrypoint python oom-signal-test /opt/oom-signal/burst_test.py
 ```

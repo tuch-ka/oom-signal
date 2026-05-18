@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir psutil
 
 COPY --from=build /oom-signal /usr/local/bin/oom-signal
 COPY test/eat_memory.py /opt/oom-signal/eat_memory.py
+COPY test/burst_test.py /opt/oom-signal/burst_test.py
 
 ENTRYPOINT ["python", "/opt/oom-signal/eat_memory.py"]
 CMD ["threads"]

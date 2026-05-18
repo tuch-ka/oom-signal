@@ -1,4 +1,4 @@
-.PHONY: build test test-threads test-processes
+.PHONY: build test test-threads test-processes test-burst
 
 MEMORY_LIMIT ?= 512m
 MEMORY_STEP  ?= 64
@@ -16,3 +16,6 @@ test-threads:
 
 test-processes:
 	docker run --rm --memory=$(MEMORY_LIMIT) $(shell docker build -q -t oom-signal-test -f test/Dockerfile .) processes --step $(MEMORY_STEP) --workers $(WORKERS)
+
+test-burst:
+	docker run --rm --memory=$(MEMORY_LIMIT) --entrypoint python $(shell docker build -q -t oom-signal-test -f test/Dockerfile .) /opt/oom-signal/burst_test.py

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -11,57 +12,109 @@ import (
 	"oom-signal/src/internal/threshold"
 )
 
-const defaultPollInterval = 100 * time.Millisecond
+const (
+	defaultPollInterval = 100 * time.Millisecond
+	minPollInterval     = 1 * time.Millisecond
+
+	// Пороги скорости роста (% от limit в секунду).
+	growthLowThreshold  = 0.5
+	growthHighThreshold = 5.0
+)
 
 // Monitor periodically checks cgroup memory usage and sends a signal
 // to the target process when the threshold is exceeded (rising edge).
 type Monitor struct {
-	threshold threshold.Threshold
-	proc      *os.Process
-	sig       syscall.Signal
-	reader    memory_reader.MemoryReader
-	stopOnce  sync.Once
-	stopCh    chan struct{}
-	exceeded  bool
-	testPoll  time.Duration
+	threshold   threshold.Threshold
+	proc        *os.Process
+	sig         syscall.Signal
+	reader      memory_reader.MemoryReader
+	stopOnce    sync.Once
+	stopCh      chan struct{}
+	exceeded    bool
+	prevUsage   uint64
+	prevTick    time.Time
+	curInterval atomic.Int64
+	testPoll    time.Duration
 }
 
-// pollInterval возвращает текущий интервал опроса cgroup.
-func (m *Monitor) pollInterval() time.Duration {
+// calcInterval рассчитывает интервал опроса на основе скорости роста usage.
+func (m *Monitor) calcInterval(usage uint64, now time.Time) time.Duration {
+	def := defaultPollInterval
 	if m.testPoll != 0 {
-		return m.testPoll
+		def = m.testPoll
 	}
-	return defaultPollInterval
+
+	if m.prevTick.IsZero() {
+		return def
+	}
+
+	delta := int64(usage) - int64(m.prevUsage)
+	if delta <= 0 {
+		return def
+	}
+
+	elapsed := now.Sub(m.prevTick).Seconds()
+	if elapsed <= 0 {
+		return def
+	}
+
+	growthPct := float64(delta) / elapsed / float64(m.reader.Limit()) * 100
+
+	if growthPct <= growthLowThreshold {
+		return def
+	}
+	if growthPct >= growthHighThreshold {
+		return minPollInterval
+	}
+
+	fraction := (growthPct - growthLowThreshold) / (growthHighThreshold - growthLowThreshold)
+	return def - time.Duration(fraction*float64(def-minPollInterval))
 }
 
 // New creates a new memory monitor.
-func New(th threshold.Threshold, pollInterval time.Duration, proc *os.Process, sig syscall.Signal, reader memory_reader.MemoryReader) *Monitor {
+func New(th threshold.Threshold, proc *os.Process, sig syscall.Signal, reader memory_reader.MemoryReader) *Monitor {
 	return &Monitor{
 		threshold: th,
 		proc:      proc,
 		sig:       sig,
 		reader:    reader,
 		stopCh:    make(chan struct{}),
-		testPoll:  pollInterval,
 	}
 }
 
 // Run starts the monitoring loop. It runs until Stop is called.
 // A signal is sent each time the threshold is crossed (rising edge only).
 func (m *Monitor) Run() {
-	ticker := time.NewTicker(m.pollInterval())
+	def := defaultPollInterval
+	if m.testPoll != 0 {
+		def = m.testPoll
+	}
+	m.curInterval.Store(int64(def))
+
+	ticker := time.NewTicker(def)
 	defer ticker.Stop()
 
 	limit := m.reader.Limit()
 
 	for {
 		select {
-		case <-ticker.C:
+		case now := <-ticker.C:
 			usage, err := m.reader.ReadUsage()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[oom-signal] error reading cgroup memory: %v\n", err)
 				continue
 			}
+
+			newInterval := m.calcInterval(usage, now)
+			if newInterval != time.Duration(m.curInterval.Load()) {
+				fmt.Fprintf(os.Stderr, "[oom-signal] poll interval: %s → %s\n",
+					time.Duration(m.curInterval.Load()), newInterval)
+				m.curInterval.Store(int64(newInterval))
+				ticker.Reset(newInterval)
+			}
+
+			m.prevUsage = usage
+			m.prevTick = now
 
 			nowExceeded := m.threshold.Exceeded(usage, limit)
 			if nowExceeded && !m.exceeded {
