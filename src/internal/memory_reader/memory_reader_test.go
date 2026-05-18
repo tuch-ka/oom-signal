@@ -6,86 +6,6 @@ import (
 	"testing"
 )
 
-func TestParseCgroupFileV2(t *testing.T) {
-	t.Parallel()
-	data := []byte("0::/kubepods/besteffort/pod123\n")
-	ver, path := parseCgroupFile(data)
-	if ver != CgroupV2 {
-		t.Errorf("expected CgroupV2, got %v", ver)
-	}
-	if path != "/kubepods/besteffort/pod123" {
-		t.Errorf("expected /kubepods/besteffort/pod123, got %s", path)
-	}
-}
-
-func TestParseCgroupFileV1(t *testing.T) {
-	t.Parallel()
-	data := []byte("10:memory:/kubepods/burstable/pod456\n")
-	ver, path := parseCgroupFile(data)
-	if ver != CgroupV1 {
-		t.Errorf("expected CgroupV1, got %v", ver)
-	}
-	if path != "/kubepods/burstable/pod456" {
-		t.Errorf("expected /kubepods/burstable/pod456, got %s", path)
-	}
-}
-
-func TestParseCgroupFileV1Nested(t *testing.T) {
-	t.Parallel()
-	data := []byte("10:memory:/kubepods/burstable/podabc/container123\n1:cpuset:/\n")
-	ver, path := parseCgroupFile(data)
-	if ver != CgroupV1 {
-		t.Errorf("expected CgroupV1, got %v", ver)
-	}
-	if path != "/kubepods/burstable/podabc/container123" {
-		t.Errorf("expected nested path, got %s", path)
-	}
-}
-
-func TestParseCgroupFileV2BeforeV1(t *testing.T) {
-	t.Parallel()
-	data := []byte("0::/system.slice/app.service\n10:memory:/app\n")
-	ver, path := parseCgroupFile(data)
-	if ver != CgroupV2 {
-		t.Errorf("expected CgroupV2 to take priority, got %v", ver)
-	}
-	if path != "/system.slice/app.service" {
-		t.Errorf("expected /system.slice/app.service, got %s", path)
-	}
-}
-
-func TestParseCgroupFileEmpty(t *testing.T) {
-	t.Parallel()
-	ver, path := parseCgroupFile([]byte(""))
-	if ver != MemoryReaderUnknown {
-		t.Errorf("expected MemoryReaderUnknown, got %v", ver)
-	}
-	if path != "" {
-		t.Errorf("expected empty path, got %s", path)
-	}
-}
-
-func TestParseCgroupFileNoMatch(t *testing.T) {
-	t.Parallel()
-	data := []byte("1:cpuset:/\n2:cpu:/\n")
-	ver, _ := parseCgroupFile(data)
-	if ver != MemoryReaderUnknown {
-		t.Errorf("expected MemoryReaderUnknown, got %v", ver)
-	}
-}
-
-func TestParseCgroupFileTrailingNewline(t *testing.T) {
-	t.Parallel()
-	data := []byte("0::/app\n\n")
-	ver, path := parseCgroupFile(data)
-	if ver != CgroupV2 {
-		t.Errorf("expected CgroupV2, got %v", ver)
-	}
-	if path != "/app" {
-		t.Errorf("expected /app, got %s", path)
-	}
-}
-
 func TestMemoryReaderVersionString(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -101,6 +21,85 @@ func TestMemoryReaderVersionString(t *testing.T) {
 		if got := c.v.String(); got != c.want {
 			t.Errorf("MemoryReaderVersion(%d).String() = %q, want %q", c.v, got, c.want)
 		}
+	}
+}
+
+func TestNewMemoryReaderV1Probed(t *testing.T) {
+	dir := t.TempDir()
+
+	// Подменяем пути cgroup v1 на временные
+	origMountV1 := cgroupMountV1
+	cgroupMountV1 = dir
+	t.Cleanup(func() { cgroupMountV1 = origMountV1 })
+
+	writeFile(t, dir+"/"+cgroupV1UsageFile, "536870912\n")
+	writeFile(t, dir+"/"+cgroupV1LimitFile, "1073741824\n")
+
+	r, err := NewMemoryReader()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.Version() != CgroupV1 {
+		t.Errorf("expected CgroupV1, got %v", r.Version())
+	}
+	if r.Limit() != 1073741824 {
+		t.Errorf("expected limit 1073741824, got %d", r.Limit())
+	}
+}
+
+func TestNewMemoryReaderV2Probed(t *testing.T) {
+	dir := t.TempDir()
+
+	// Подменяем пути cgroup v2 на временные
+	origMountV2 := cgroupMountV2
+	cgroupMountV2 = dir
+	t.Cleanup(func() { cgroupMountV2 = origMountV2 })
+
+	writeFile(t, dir+"/"+cgroupV2UsageFile, "536870912\n")
+	writeFile(t, dir+"/"+cgroupV2LimitFile, "2147483648\n")
+
+	r, err := NewMemoryReader()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.Version() != CgroupV2 {
+		t.Errorf("expected CgroupV2, got %v", r.Version())
+	}
+	if r.Limit() != 2147483648 {
+		t.Errorf("expected limit 2147483648, got %d", r.Limit())
+	}
+}
+
+func TestNewMemoryReaderV1PriorityOverV2(t *testing.T) {
+	dir := t.TempDir()
+
+	origMountV1 := cgroupMountV1
+	origMountV2 := cgroupMountV2
+	cgroupMountV1 = dir + "/v1"
+	cgroupMountV2 = dir + "/v2"
+	t.Cleanup(func() {
+		cgroupMountV1 = origMountV1
+		cgroupMountV2 = origMountV2
+	})
+
+	writeFile(t, dir+"/v1/"+cgroupV1UsageFile, "100\n")
+	writeFile(t, dir+"/v1/"+cgroupV1LimitFile, "200\n")
+	writeFile(t, dir+"/v2/"+cgroupV2UsageFile, "300\n")
+	writeFile(t, dir+"/v2/"+cgroupV2LimitFile, "400\n")
+
+	r, err := NewMemoryReader()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.Version() != CgroupV1 {
+		t.Errorf("expected CgroupV1 (priority), got %v", r.Version())
+	}
+}
+
+func TestNewMemoryReaderNoneAvailable(t *testing.T) {
+	_, err := NewMemoryReader()
+	if err == nil {
+		t.Error("expected error when no cgroup available")
 	}
 }
 

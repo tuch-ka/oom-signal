@@ -2,12 +2,12 @@ package memory_reader
 
 import "fmt"
 
-const (
+const noLimitV1 uint64 = 1 << 62
+
+var (
 	cgroupMountV1     = "/sys/fs/cgroup/memory"
 	cgroupV1UsageFile = "memory.usage_in_bytes"
 	cgroupV1LimitFile = "memory.limit_in_bytes"
-
-	noLimitV1 uint64 = 1 << 62
 )
 
 type cgroupV1 struct {

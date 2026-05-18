@@ -5,7 +5,7 @@ import (
 	"strconv"
 )
 
-const (
+var (
 	cgroupMountV2     = "/sys/fs/cgroup"
 	cgroupV2UsageFile = "memory.current"
 	cgroupV2LimitFile = "memory.max"
