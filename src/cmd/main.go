@@ -18,6 +18,7 @@ func main() {
 	flag.Var(&th, "threshold", "Memory threshold: fraction 0.0–1.0 or megabytes e.g. 100MB")
 	targetPid := flag.Int("pid", 1, "PID to signal when threshold is exceeded")
 	sigName := flag.String("signal", "SIGUSR1", "Signal to send (e.g. SIGUSR1, SIGTERM, or numeric)")
+	cooldown := flag.Duration("cooldown", monitor.DefaultCooldown, "Minimum interval between signals, 0 to disable")
 	flag.Parse()
 
 	sig, err := signal.Parse(*sigName)
@@ -38,10 +39,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "[oom-signal] starting: threshold=%s pid=%d signal=%s reader=%s\n",
-		th.String(), *targetPid, signal.Name(sig), reader.Version())
+	fmt.Fprintf(os.Stderr, "[oom-signal] starting: threshold=%s pid=%d signal=%s cooldown=%s reader=%s\n",
+		th.String(), *targetPid, signal.Name(sig), cooldown, reader.Version())
 
-	mon := monitor.New(th, proc, sig, reader)
+	mon := monitor.New(th, proc, sig, reader, *cooldown)
 	go mon.Run()
 
 	sigCh := make(chan os.Signal, 1)

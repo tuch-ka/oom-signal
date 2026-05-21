@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -53,48 +54,121 @@ func (m *mockReader) getCalls() int {
 	return m.calls
 }
 
-func newTestMonitor(th threshold.Threshold, reader memory_reader.MemoryReader) *Monitor {
+func newTestMonitor(th threshold.Threshold, reader memory_reader.MemoryReader, cooldown time.Duration) *Monitor {
 	proc, _ := os.FindProcess(os.Getpid())
-	mon := New(th, proc, syscall.SIGUSR1, reader)
+	mon := New(th, proc, syscall.SIGUSR1, reader, cooldown)
 	mon.testPoll = 10 * time.Millisecond
 	return mon
 }
 
-func TestRisingEdgeSendsSignalOnce(t *testing.T) {
-	t.Parallel()
-	th, _ := threshold.New("0.8")
-	reader := &mockReader{limit: 1000, usage: 500}
-
-	mon := newTestMonitor(th, reader)
-	go mon.Run()
-	defer mon.Stop()
-
-	time.Sleep(30 * time.Millisecond)
-
-	reader.setUsage(900)
-	time.Sleep(50 * time.Millisecond)
-
-	reader.setUsage(950)
-	time.Sleep(30 * time.Millisecond)
+type signalCounter struct {
+	count atomic.Int64
+	ch    chan os.Signal
+	done  chan struct{}
 }
 
-func TestRisingEdgeSendsOnRecoveryAndReExceed(t *testing.T) {
-	t.Parallel()
+func newSignalCounter() *signalCounter {
+	sc := &signalCounter{
+		ch:   make(chan os.Signal, 64),
+		done: make(chan struct{}),
+	}
+	signal.Notify(sc.ch, syscall.SIGUSR1)
+	go func() {
+		for {
+			select {
+			case <-sc.ch:
+				sc.count.Add(1)
+			case <-sc.done:
+				return
+			}
+		}
+	}()
+	return sc
+}
+
+func (sc *signalCounter) get() int64 { return sc.count.Load() }
+func (sc *signalCounter) reset()     { sc.count.Store(0) }
+func (sc *signalCounter) stop() {
+	signal.Stop(sc.ch)
+	close(sc.done)
+}
+
+func TestRisingEdge_SustainedExceed_SendsOneSignal(t *testing.T) {
+	sc := newSignalCounter()
+	defer sc.stop()
+
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500}
-
-	mon := newTestMonitor(th, reader)
+	mon := newTestMonitor(th, reader, 0)
 	go mon.Run()
 	defer mon.Stop()
 
-	reader.setUsage(900)
+	time.Sleep(30 * time.Millisecond)
+	sc.reset()
+
+	reader.setUsage(900) // превысили порог
 	time.Sleep(50 * time.Millisecond)
 
-	reader.setUsage(500)
+	reader.setUsage(950) // всё ещё превышен
 	time.Sleep(50 * time.Millisecond)
 
-	reader.setUsage(900)
+	if got := sc.get(); got != 1 {
+		t.Errorf("expected 1 signal on sustained exceed, got %d", got)
+	}
+}
+
+func TestRisingEdge_Oscillation_MultipleSignals(t *testing.T) {
+	sc := newSignalCounter()
+	defer sc.stop()
+
+	th, _ := threshold.New("0.8")
+	reader := &mockReader{limit: 1000, usage: 500}
+	mon := newTestMonitor(th, reader, 0)
+	go mon.Run()
+	defer mon.Stop()
+
+	time.Sleep(30 * time.Millisecond)
+	sc.reset()
+
+	for i := 0; i < 3; i++ {
+		reader.setUsage(900) // превысили → rising edge
+		time.Sleep(30 * time.Millisecond)
+		reader.setUsage(500) // вернулось ниже порога
+		time.Sleep(30 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	got := sc.get()
+	if got != 3 {
+		t.Errorf("expected 3 signals (one per rising edge), got %d", got)
+	}
+}
+
+func TestRisingEdge_RecoveryAndReExceed(t *testing.T) {
+	sc := newSignalCounter()
+	defer sc.stop()
+
+	th, _ := threshold.New("0.8")
+	reader := &mockReader{limit: 1000, usage: 500}
+	mon := newTestMonitor(th, reader, 0)
+	go mon.Run()
+	defer mon.Stop()
+
+	time.Sleep(30 * time.Millisecond)
+	sc.reset()
+
+	reader.setUsage(900) // превысили → сигнал
 	time.Sleep(50 * time.Millisecond)
+
+	reader.setUsage(500) // восстановились
+	time.Sleep(50 * time.Millisecond)
+
+	reader.setUsage(900) // снова превысили → сигнал
+	time.Sleep(50 * time.Millisecond)
+
+	if got := sc.get(); got != 2 {
+		t.Errorf("expected 2 signals (recovery + re-exceed), got %d", got)
+	}
 }
 
 func TestStop(t *testing.T) {
@@ -102,7 +176,7 @@ func TestStop(t *testing.T) {
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500}
 
-	mon := newTestMonitor(th, reader)
+	mon := newTestMonitor(th, reader, 0)
 	go mon.Run()
 
 	time.Sleep(30 * time.Millisecond)
@@ -122,7 +196,7 @@ func TestReadUsageErrorContinues(t *testing.T) {
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500, err: os.ErrNotExist}
 
-	mon := newTestMonitor(th, reader)
+	mon := newTestMonitor(th, reader, 0)
 	go mon.Run()
 	defer mon.Stop()
 
@@ -139,7 +213,7 @@ func TestAbsoluteThreshold(t *testing.T) {
 	limit := uint64(200 * 1024 * 1024)
 	reader := &mockReader{limit: limit, usage: 50 * 1024 * 1024}
 
-	mon := newTestMonitor(th, reader)
+	mon := newTestMonitor(th, reader, 0)
 	go mon.Run()
 	defer mon.Stop()
 
@@ -155,7 +229,7 @@ func newCalcMonitor(t *testing.T) *Monitor {
 	proc, _ := os.FindProcess(os.Getpid())
 	limit := uint64(100 * 1024 * 1024) // 100 MB
 	reader := &mockReader{limit: limit}
-	return New(th, proc, syscall.SIGUSR1, reader)
+	return New(th, proc, syscall.SIGUSR1, reader, 0)
 }
 
 func TestCalcIntervalFirstTick(t *testing.T) {
@@ -238,5 +312,102 @@ func TestCalcIntervalWithTestPoll(t *testing.T) {
 	interval = mon.calcInterval(mon.prevUsage+delta, time.Now())
 	if interval != mon.testPoll {
 		t.Errorf("expected testPoll below threshold, got %v", interval)
+	}
+}
+
+// --- Тесты cooldown ---
+
+func TestCooldown_SuppressesOscillation(t *testing.T) {
+	sc := newSignalCounter()
+	defer sc.stop()
+
+	th, _ := threshold.New("0.8")
+	reader := &mockReader{limit: 1000, usage: 500}
+	mon := newTestMonitor(th, reader, 200*time.Millisecond)
+	go mon.Run()
+	defer mon.Stop()
+
+	time.Sleep(30 * time.Millisecond)
+	sc.reset()
+
+	// Первое превышение → сигнал отправлен
+	reader.setUsage(900)
+	time.Sleep(30 * time.Millisecond)
+
+	// Осцилляция: ниже порога и снова выше — cooldown подавляет
+	for i := 0; i < 3; i++ {
+		reader.setUsage(500)
+		time.Sleep(20 * time.Millisecond)
+		reader.setUsage(900)
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// Только первый сигнал, остальные подавлены cooldown
+	got := sc.get()
+	if got != 1 {
+		t.Errorf("expected 1 signal (rest suppressed by cooldown), got %d", got)
+	}
+}
+
+func TestCooldown_AllowsAfterExpiry(t *testing.T) {
+	sc := newSignalCounter()
+	defer sc.stop()
+
+	th, _ := threshold.New("0.8")
+	reader := &mockReader{limit: 1000, usage: 500}
+	mon := newTestMonitor(th, reader, 100*time.Millisecond)
+	go mon.Run()
+	defer mon.Stop()
+
+	time.Sleep(30 * time.Millisecond)
+	sc.reset()
+
+	// Превышение → сигнал
+	reader.setUsage(900)
+	time.Sleep(50 * time.Millisecond)
+
+	if got := sc.get(); got != 1 {
+		t.Fatalf("expected 1 signal after first exceed, got %d", got)
+	}
+
+	// Возвращаем ниже порога, ждём cooldown
+	reader.setUsage(500)
+	time.Sleep(150 * time.Millisecond) // cooldown истёк
+
+	// Снова превышаем → сигнал разрешён
+	reader.setUsage(900)
+	time.Sleep(50 * time.Millisecond)
+
+	if got := sc.get(); got != 2 {
+		t.Errorf("expected 2 signals total (cooldown expired), got %d", got)
+	}
+}
+
+func TestCooldown_Zero_Disabled(t *testing.T) {
+	sc := newSignalCounter()
+	defer sc.stop()
+
+	th, _ := threshold.New("0.8")
+	reader := &mockReader{limit: 1000, usage: 500}
+	mon := newTestMonitor(th, reader, 0)
+	go mon.Run()
+	defer mon.Stop()
+
+	time.Sleep(30 * time.Millisecond)
+	sc.reset()
+
+	// Без cooldown осцилляция генерирует сигнал на каждый rising edge
+	for i := 0; i < 3; i++ {
+		reader.setUsage(900)
+		time.Sleep(30 * time.Millisecond)
+		reader.setUsage(500)
+		time.Sleep(30 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	got := sc.get()
+	if got != 3 {
+		t.Errorf("expected 3 signals with cooldown=0, got %d", got)
 	}
 }

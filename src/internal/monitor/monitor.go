@@ -15,6 +15,7 @@ import (
 const (
 	defaultPollInterval = 100 * time.Millisecond
 	minPollInterval     = 1 * time.Millisecond
+	DefaultCooldown     = 5 * time.Second
 
 	// Пороги скорости роста (% от limit в секунду).
 	growthLowThreshold  = 0.5
@@ -34,6 +35,8 @@ type Monitor struct {
 	prevUsage   uint64
 	prevTick    time.Time
 	curInterval atomic.Int64
+	cooldown    time.Duration
+	lastSignal  time.Time
 	testPoll    time.Duration
 }
 
@@ -72,13 +75,14 @@ func (m *Monitor) calcInterval(usage uint64, now time.Time) time.Duration {
 }
 
 // New creates a new memory monitor.
-func New(th threshold.Threshold, proc *os.Process, sig syscall.Signal, reader memory_reader.MemoryReader) *Monitor {
+func New(th threshold.Threshold, proc *os.Process, sig syscall.Signal, reader memory_reader.MemoryReader, cooldown time.Duration) *Monitor {
 	return &Monitor{
 		threshold: th,
 		proc:      proc,
 		sig:       sig,
 		reader:    reader,
 		stopCh:    make(chan struct{}),
+		cooldown:  cooldown,
 	}
 }
 
@@ -118,18 +122,23 @@ func (m *Monitor) Run() {
 
 			nowExceeded := m.threshold.Exceeded(usage, limit)
 			if nowExceeded && !m.exceeded {
-				var freeStr string
-				if usage > limit {
-					freeStr = "0 (over limit)"
+				if m.cooldown > 0 && !m.lastSignal.IsZero() && now.Sub(m.lastSignal) < m.cooldown {
+					fmt.Fprintf(os.Stderr, "[oom-signal] signal suppressed: cooldown (%s not elapsed since last signal)\n", m.cooldown)
 				} else {
-					freeStr = fmt.Sprintf("%d", limit-usage)
-				}
-				fmt.Fprintf(os.Stderr, "[oom-signal] memory threshold exceeded: usage %d / limit %d (free %s bytes, threshold %s)\n",
-					usage, limit, freeStr, m.threshold.LogString())
-				if err := m.proc.Signal(m.sig); err != nil {
-					fmt.Fprintf(os.Stderr, "[oom-signal] error sending signal to pid %d: %v\n", m.proc.Pid, err)
-				} else {
-					fmt.Fprintf(os.Stderr, "[oom-signal] signal sent to pid %d\n", m.proc.Pid)
+					var freeStr string
+					if usage > limit {
+						freeStr = "0 (over limit)"
+					} else {
+						freeStr = fmt.Sprintf("%d", limit-usage)
+					}
+					fmt.Fprintf(os.Stderr, "[oom-signal] memory threshold exceeded: usage %d / limit %d (free %s bytes, threshold %s)\n",
+						usage, limit, freeStr, m.threshold.LogString())
+					if err := m.proc.Signal(m.sig); err != nil {
+						fmt.Fprintf(os.Stderr, "[oom-signal] error sending signal to pid %d: %v\n", m.proc.Pid, err)
+					} else {
+						fmt.Fprintf(os.Stderr, "[oom-signal] signal sent to pid %d\n", m.proc.Pid)
+					}
+					m.lastSignal = now
 				}
 			}
 			m.exceeded = nowExceeded
