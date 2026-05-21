@@ -44,6 +44,15 @@ func TestMainInvalidSignal(t *testing.T) {
 	}
 }
 
+func TestMainPollIntervalTooSmall(t *testing.T) {
+	t.Parallel()
+	cmd := exec.Command(binPath, "--poll-interval=500us")
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "[oom-signal] error: poll-interval must be at least") {
+		t.Errorf("expected poll-interval validation error, got: %s", out)
+	}
+}
+
 func TestMainHelp(t *testing.T) {
 	t.Parallel()
 	cmd := exec.Command(binPath, "--help")

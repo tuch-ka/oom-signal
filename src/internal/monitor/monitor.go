@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	defaultPollInterval = 100 * time.Millisecond
-	minPollInterval     = 1 * time.Millisecond
+	DefaultPollInterval = 100 * time.Millisecond
+	MinPollInterval     = 1 * time.Millisecond
 	DefaultCooldown     = 5 * time.Second
 
 	// Пороги скорости роста (% от limit в секунду).
@@ -25,27 +25,24 @@ const (
 // Monitor periodically checks cgroup memory usage and sends a signal
 // to the target process when the threshold is exceeded (rising edge).
 type Monitor struct {
-	threshold   threshold.Threshold
-	proc        *os.Process
-	sig         syscall.Signal
-	reader      memory_reader.MemoryReader
-	stopOnce    sync.Once
-	stopCh      chan struct{}
-	exceeded    bool
-	prevUsage   uint64
-	prevTick    time.Time
-	curInterval atomic.Int64
-	cooldown    time.Duration
-	lastSignal  time.Time
-	testPoll    time.Duration
+	threshold    threshold.Threshold
+	proc         *os.Process
+	sig          syscall.Signal
+	reader       memory_reader.MemoryReader
+	stopOnce     sync.Once
+	stopCh       chan struct{}
+	exceeded     bool
+	prevUsage    uint64
+	prevTick     time.Time
+	curInterval  atomic.Int64
+	pollInterval time.Duration
+	cooldown     time.Duration
+	lastSignal   time.Time
 }
 
 // calcInterval рассчитывает интервал опроса на основе скорости роста usage.
 func (m *Monitor) calcInterval(usage uint64, now time.Time) time.Duration {
-	def := defaultPollInterval
-	if m.testPoll != 0 {
-		def = m.testPoll
-	}
+	def := m.pollInterval
 
 	if m.prevTick.IsZero() {
 		return def
@@ -67,32 +64,30 @@ func (m *Monitor) calcInterval(usage uint64, now time.Time) time.Duration {
 		return def
 	}
 	if growthPct >= growthHighThreshold {
-		return minPollInterval
+		return MinPollInterval
 	}
 
 	fraction := (growthPct - growthLowThreshold) / (growthHighThreshold - growthLowThreshold)
-	return def - time.Duration(fraction*float64(def-minPollInterval))
+	return def - time.Duration(fraction*float64(def-MinPollInterval))
 }
 
 // New creates a new memory monitor.
-func New(th threshold.Threshold, proc *os.Process, sig syscall.Signal, reader memory_reader.MemoryReader, cooldown time.Duration) *Monitor {
+func New(th threshold.Threshold, proc *os.Process, sig syscall.Signal, reader memory_reader.MemoryReader, pollInterval, cooldown time.Duration) *Monitor {
 	return &Monitor{
-		threshold: th,
-		proc:      proc,
-		sig:       sig,
-		reader:    reader,
-		stopCh:    make(chan struct{}),
-		cooldown:  cooldown,
+		threshold:    th,
+		proc:         proc,
+		sig:          sig,
+		reader:       reader,
+		stopCh:       make(chan struct{}),
+		pollInterval: pollInterval,
+		cooldown:     cooldown,
 	}
 }
 
 // Run starts the monitoring loop. It runs until Stop is called.
 // A signal is sent each time the threshold is crossed (rising edge only).
 func (m *Monitor) Run() {
-	def := defaultPollInterval
-	if m.testPoll != 0 {
-		def = m.testPoll
-	}
+	def := m.pollInterval
 	m.curInterval.Store(int64(def))
 
 	ticker := time.NewTicker(def)

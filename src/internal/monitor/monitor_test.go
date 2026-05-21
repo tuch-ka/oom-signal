@@ -54,11 +54,9 @@ func (m *mockReader) getCalls() int {
 	return m.calls
 }
 
-func newTestMonitor(th threshold.Threshold, reader memory_reader.MemoryReader, cooldown time.Duration) *Monitor {
+func newTestMonitor(th threshold.Threshold, reader memory_reader.MemoryReader, pollInterval, cooldown time.Duration) *Monitor {
 	proc, _ := os.FindProcess(os.Getpid())
-	mon := New(th, proc, syscall.SIGUSR1, reader, cooldown)
-	mon.testPoll = 10 * time.Millisecond
-	return mon
+	return New(th, proc, syscall.SIGUSR1, reader, pollInterval, cooldown)
 }
 
 type signalCounter struct {
@@ -99,7 +97,7 @@ func TestRisingEdge_SustainedExceed_SendsOneSignal(t *testing.T) {
 
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500}
-	mon := newTestMonitor(th, reader, 0)
+	mon := newTestMonitor(th, reader, 10*time.Millisecond, 0)
 	go mon.Run()
 	defer mon.Stop()
 
@@ -123,7 +121,7 @@ func TestRisingEdge_Oscillation_MultipleSignals(t *testing.T) {
 
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500}
-	mon := newTestMonitor(th, reader, 0)
+	mon := newTestMonitor(th, reader, 10*time.Millisecond, 0)
 	go mon.Run()
 	defer mon.Stop()
 
@@ -150,7 +148,7 @@ func TestRisingEdge_RecoveryAndReExceed(t *testing.T) {
 
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500}
-	mon := newTestMonitor(th, reader, 0)
+	mon := newTestMonitor(th, reader, 10*time.Millisecond, 0)
 	go mon.Run()
 	defer mon.Stop()
 
@@ -176,7 +174,7 @@ func TestStop(t *testing.T) {
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500}
 
-	mon := newTestMonitor(th, reader, 0)
+	mon := newTestMonitor(th, reader, 10*time.Millisecond, 0)
 	go mon.Run()
 
 	time.Sleep(30 * time.Millisecond)
@@ -196,7 +194,7 @@ func TestReadUsageErrorContinues(t *testing.T) {
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500, err: os.ErrNotExist}
 
-	mon := newTestMonitor(th, reader, 0)
+	mon := newTestMonitor(th, reader, 10*time.Millisecond, 0)
 	go mon.Run()
 	defer mon.Stop()
 
@@ -213,7 +211,7 @@ func TestAbsoluteThreshold(t *testing.T) {
 	limit := uint64(200 * 1024 * 1024)
 	reader := &mockReader{limit: limit, usage: 50 * 1024 * 1024}
 
-	mon := newTestMonitor(th, reader, 0)
+	mon := newTestMonitor(th, reader, 10*time.Millisecond, 0)
 	go mon.Run()
 	defer mon.Stop()
 
@@ -229,13 +227,13 @@ func newCalcMonitor(t *testing.T) *Monitor {
 	proc, _ := os.FindProcess(os.Getpid())
 	limit := uint64(100 * 1024 * 1024) // 100 MB
 	reader := &mockReader{limit: limit}
-	return New(th, proc, syscall.SIGUSR1, reader, 0)
+	return New(th, proc, syscall.SIGUSR1, reader, DefaultPollInterval, 0)
 }
 
 func TestCalcIntervalFirstTick(t *testing.T) {
 	mon := newCalcMonitor(t)
 	interval := mon.calcInterval(50*1024*1024, time.Now())
-	if interval != defaultPollInterval {
+	if interval != DefaultPollInterval {
 		t.Errorf("expected default on first tick, got %v", interval)
 	}
 }
@@ -246,7 +244,7 @@ func TestCalcIntervalNegativeDelta(t *testing.T) {
 	mon.prevTick = time.Now().Add(-100 * time.Millisecond)
 
 	interval := mon.calcInterval(50*1024*1024, time.Now())
-	if interval != defaultPollInterval {
+	if interval != DefaultPollInterval {
 		t.Errorf("expected default on negative delta, got %v", interval)
 	}
 }
@@ -259,7 +257,7 @@ func TestCalcIntervalBelowLowThreshold(t *testing.T) {
 	// Рост 0.3%/сек — ниже growthLowThreshold (0.5%)
 	delta := uint64(0.3 * 0.1 * float64(mon.reader.Limit()) / 100)
 	interval := mon.calcInterval(mon.prevUsage+delta, time.Now())
-	if interval != defaultPollInterval {
+	if interval != DefaultPollInterval {
 		t.Errorf("expected default below low threshold, got %v", interval)
 	}
 }
@@ -272,7 +270,7 @@ func TestCalcIntervalAboveHighThreshold(t *testing.T) {
 	// Рост 7.5%/сек — выше growthHighThreshold (5.0%)
 	delta := uint64(7.5 * 0.1 * float64(mon.reader.Limit()) / 100)
 	interval := mon.calcInterval(mon.prevUsage+delta, time.Now())
-	if interval != minPollInterval {
+	if interval != MinPollInterval {
 		t.Errorf("expected min interval above high threshold, got %v", interval)
 	}
 }
@@ -287,31 +285,34 @@ func TestCalcIntervalBetweenThresholds(t *testing.T) {
 	delta := uint64(growthPct * 0.1 * float64(mon.reader.Limit()) / 100)
 	interval := mon.calcInterval(mon.prevUsage+delta, time.Now())
 
-	if interval <= minPollInterval || interval >= defaultPollInterval {
+	if interval <= MinPollInterval || interval >= DefaultPollInterval {
 		t.Errorf("expected interval between min and default, got %v", interval)
 	}
 }
 
-func TestCalcIntervalWithTestPoll(t *testing.T) {
-	mon := newCalcMonitor(t)
-	mon.testPoll = 10 * time.Millisecond
+func TestCalcIntervalWithCustomPollInterval(t *testing.T) {
+	th, _ := threshold.New("0.8")
+	proc, _ := os.FindProcess(os.Getpid())
+	limit := uint64(100 * 1024 * 1024) // 100 MB
+	reader := &mockReader{limit: limit}
+	mon := New(th, proc, syscall.SIGUSR1, reader, 10*time.Millisecond, 0)
 	mon.prevUsage = 10 * 1024 * 1024
 	mon.prevTick = time.Now().Add(-100 * time.Millisecond)
 
-	// Рост 7.5%/сек — выше highThreshold, должен вернуть minPollInterval
+	// Рост 7.5%/сек — выше highThreshold, должен вернуть MinPollInterval
 	delta := uint64(7.5 * 0.1 * float64(mon.reader.Limit()) / 100)
 	interval := mon.calcInterval(mon.prevUsage+delta, time.Now())
-	if interval != minPollInterval {
-		t.Errorf("expected min interval with testPoll, got %v", interval)
+	if interval != MinPollInterval {
+		t.Errorf("expected min interval with custom pollInterval, got %v", interval)
 	}
 
-	// Ниже порога — должен вернуть testPoll
+	// Ниже порога — должен вернуть pollInterval
 	mon.prevUsage = 10 * 1024 * 1024
 	mon.prevTick = time.Now().Add(-100 * time.Millisecond)
 	delta = uint64(0.3 * 0.1 * float64(mon.reader.Limit()) / 100)
 	interval = mon.calcInterval(mon.prevUsage+delta, time.Now())
-	if interval != mon.testPoll {
-		t.Errorf("expected testPoll below threshold, got %v", interval)
+	if interval != mon.pollInterval {
+		t.Errorf("expected pollInterval below threshold, got %v", interval)
 	}
 }
 
@@ -323,7 +324,7 @@ func TestCooldown_SuppressesOscillation(t *testing.T) {
 
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500}
-	mon := newTestMonitor(th, reader, 200*time.Millisecond)
+	mon := newTestMonitor(th, reader, 10*time.Millisecond, 200*time.Millisecond)
 	go mon.Run()
 	defer mon.Stop()
 
@@ -356,7 +357,7 @@ func TestCooldown_AllowsAfterExpiry(t *testing.T) {
 
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500}
-	mon := newTestMonitor(th, reader, 100*time.Millisecond)
+	mon := newTestMonitor(th, reader, 10*time.Millisecond, 100*time.Millisecond)
 	go mon.Run()
 	defer mon.Stop()
 
@@ -390,7 +391,7 @@ func TestCooldown_Zero_Disabled(t *testing.T) {
 
 	th, _ := threshold.New("0.8")
 	reader := &mockReader{limit: 1000, usage: 500}
-	mon := newTestMonitor(th, reader, 0)
+	mon := newTestMonitor(th, reader, 10*time.Millisecond, 0)
 	go mon.Run()
 	defer mon.Stop()
 
