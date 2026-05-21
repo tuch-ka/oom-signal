@@ -20,7 +20,7 @@ oom-signal [--threshold=0.8] [--pid=1] [--signal=SIGUSR1] [--poll-interval=100ms
 
 | Параметр | Тип | По умолчанию | Описание |
 |----------|-----|--------------|----------|
-| `--threshold` | fraction или MB | 0.8 | Порог: доля 0.0–1.0 (напр. `0.85`) или запас в МБ (напр. `100MB`) |
+| `--threshold` | fraction или MiB | 0.8 | Порог: доля 0.0–1.0 (напр. `0.85`) или запас в МиБ (напр. `100MiB`) |
 | `--pid` | int | 1 | PID процесса, в который отправить сигнал при превышении порога |
 | `--signal` | string | SIGUSR1 | Сигнал для отправки (имя, напр. SIGTERM, или номер) |
 | `--poll-interval` | duration | 100ms | Базовый интервал опроса (минимум 1ms) |
@@ -33,7 +33,7 @@ oom-signal [--threshold=0.8] [--pid=1] [--signal=SIGUSR1] [--poll-interval=100ms
 ```python
 import subprocess, os
 
-monitor = subprocess.Popen(["oom-signal", "--threshold=100MB", "--pid=" + str(os.getpid())])
+monitor = subprocess.Popen(["oom-signal", "--threshold=100MiB", "--pid=" + str(os.getpid())])
 
 # Приложение работает...
 # При получении SIGUSR1 — обработать ситуацию
@@ -42,7 +42,7 @@ monitor.terminate()
 ```
 
 ```go
-cmd := exec.Command("oom-signal", "--threshold=100MB", "--pid="+strconv.Itoa(os.Getpid()))
+cmd := exec.Command("oom-signal", "--threshold=100MiB", "--pid="+strconv.Itoa(os.Getpid()))
 cmd.Start()
 
 // Приложение работает...
@@ -122,7 +122,7 @@ ENTRYPOINT ["/myapp"]
 3. При превышении порога отправляет сигнал в указанный PID. Сигнал отправляется один раз на каждое пересечение порога снизу вверх (rising edge) — если память освободилась и снова превысила порог, сигнал отправится повторно. Повторная отправка ограничена cooldown-периодом: если с момента последнего сигнала прошло меньше `--cooldown`, сигнал подавляется.
 4. Порог может быть задан:
    - Долей: `--threshold=0.8` — срабатывает при `usage/limit > 0.8`
-   - Запасом в МБ: `--threshold=100MB` — срабатывает, когда свободной памяти < 100 МБ
+   - Запасом в МиБ: `--threshold=100MiB` — срабатывает, когда свободной памяти < 100 МиБ
 5. Останавливается при получении SIGTERM или SIGINT.
 
 ## Динамический интервал опроса
@@ -148,7 +148,7 @@ ENTRYPOINT ["/myapp"]
 | `src/internal/memory_reader/cgroup_v1.go` | Реализация MemoryReader для cgroup v1 |
 | `src/internal/memory_reader/cgroup_v2.go` | Реализация MemoryReader для cgroup v2 |
 | `src/internal/signal/signal.go` | Парсинг сигнала: имя (SIGUSR1) или номер |
-| `src/internal/threshold/threshold.go` | Тип Threshold: парсинг и проверка порога (процент / МБ) |
+| `src/internal/threshold/threshold.go` | Тип Threshold: парсинг и проверка порога (процент / МиБ) |
 | `src/internal/monitor/monitor.go` | Мониторинг памяти с тикером, отправка сигнала по rising edge |
 
 ## Логирование

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const mb = 1024 * 1024
+const mib = 1024 * 1024
 
 type thresholdMode int
 
@@ -16,14 +16,14 @@ const (
 )
 
 // Threshold represents a memory threshold in either percent (0.0–1.0) or
-// absolute megabytes (e.g. "100MB"). It implements flag.Value.
+// absolute mebibytes (e.g. "100MiB"). It implements flag.Value.
 type Threshold struct {
 	mode    thresholdMode
 	percent float64
 	bytes   uint64
 }
 
-// New creates a Threshold from a string value (e.g. "0.8" or "100MB").
+// New creates a Threshold from a string value (e.g. "0.8" or "100MiB").
 func New(value string) (Threshold, error) {
 	var t Threshold
 	if err := t.Set(value); err != nil {
@@ -60,7 +60,7 @@ func (t Threshold) String() string {
 	case thresholdPercent:
 		return fmt.Sprintf("%.2f", t.percent)
 	case thresholdAbsolute:
-		return fmt.Sprintf("%dMB", t.bytes/mb)
+		return fmt.Sprintf("%dMiB", t.bytes/mib)
 	default:
 		return ""
 	}
@@ -72,7 +72,7 @@ func (t Threshold) LogString() string {
 	case thresholdPercent:
 		return fmt.Sprintf("%.0f%%", t.percent*100)
 	case thresholdAbsolute:
-		return fmt.Sprintf("< %dMB free", t.bytes/mb)
+		return fmt.Sprintf("< %dMiB free", t.bytes/mib)
 	default:
 		return "unknown"
 	}
@@ -82,21 +82,21 @@ func (t Threshold) LogString() string {
 func (t *Threshold) Set(s string) error {
 	lower := strings.ToLower(s)
 
-	if strings.HasSuffix(lower, "mb") || strings.HasSuffix(lower, "m") {
-		suffix := 2
-		if strings.HasSuffix(lower, "m") && !strings.HasSuffix(lower, "mb") {
+	if strings.HasSuffix(lower, "mib") || strings.HasSuffix(lower, "m") {
+		suffix := 3
+		if strings.HasSuffix(lower, "m") && !strings.HasSuffix(lower, "mib") {
 			suffix = 1
 		}
 		numStr := s[:len(s)-suffix]
 		val, err := strconv.ParseFloat(numStr, 64)
 		if err != nil {
-			return fmt.Errorf("invalid megabyte value %q: %w", numStr, err)
+			return fmt.Errorf("invalid mebibyte value %q: %w", numStr, err)
 		}
 		if val <= 0 {
-			return fmt.Errorf("megabyte value must be positive, got %v", val)
+			return fmt.Errorf("mebibyte value must be positive, got %v", val)
 		}
 		t.mode = thresholdAbsolute
-		t.bytes = uint64(val * float64(mb))
+		t.bytes = uint64(val * float64(mib))
 		return nil
 	}
 

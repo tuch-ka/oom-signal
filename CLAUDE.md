@@ -17,7 +17,7 @@ oom-signal — Go-демон, мониторящий потребление па
 - `src/internal/memory_reader/cgroup_v1.go` — реализация `MemoryReader` для cgroup v1 (приватный тип cgroupV1)
 - `src/internal/memory_reader/cgroup_v2.go` — реализация `MemoryReader` для cgroup v2 (приватный тип cgroupV2)
 - `src/internal/signal/signal.go` — парсинг сигнала (signal.Parse/Name): имя или номер, номер без валидации
-- `src/internal/threshold/threshold.go` — тип Threshold: два режима (процент 0.0–1.0 или запас в МБ), парсинг флага, метод Exceeded
+- `src/internal/threshold/threshold.go` — тип Threshold: два режима (процент 0.0–1.0 или запас в МиБ), парсинг флага, метод Exceeded
 
 ## Ключевые решения
 

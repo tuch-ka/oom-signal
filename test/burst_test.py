@@ -36,8 +36,8 @@ def handle_sigusr1(signum, frame):
     os._exit(0)
 
 
-def allocate_mb(size_mb: int) -> None:
-    block = bytearray(size_mb * 1024**2)
+def allocate_mib(size_mib: int) -> None:
+    block = bytearray(size_mib * 1024**2)
     for i in range(0, len(block), 4096):
         block[i] = 1
     BLOCKS.append(block)
@@ -73,30 +73,30 @@ def main() -> None:
         text=True,
     )
 
-    limit_mb = read_cgroup_limit() // (1024 * 1024)
-    if limit_mb == 0:
+    limit_mib = read_cgroup_limit() // (1024 * 1024)
+    if limit_mib == 0:
         print("FAIL: cannot read cgroup memory limit", flush=True)
         monitor.terminate()
         sys.exit(1)
 
-    threshold_mb = int(limit_mb * 0.8)
-    warmup_mb = int(limit_mb * 0.6)
-    burst_mb = threshold_mb - warmup_mb + int(limit_mb * 0.1)
+    threshold_mib = int(limit_mib * 0.8)
+    warmup_mib = int(limit_mib * 0.6)
+    burst_mib = threshold_mib - warmup_mib + int(limit_mib * 0.1)
 
-    print(f"Burst test: limit={limit_mb}MB threshold={threshold_mb}MB "
-          f"warmup={warmup_mb}MB burst={burst_mb}MB "
+    print(f"Burst test: limit={limit_mib}MiB threshold={threshold_mib}MiB "
+          f"warmup={warmup_mib}MiB burst={burst_mib}MiB "
           f"max_latency={MAX_LATENCY_MS}ms pid={os.getpid()}", flush=True)
 
     try:
         # Фаза 1: заполняем до ~60% лимита (стабильный уровень)
-        allocate_mb(warmup_mb)
-        print(f"Warmup: allocated {warmup_mb}MB, waiting for monitor to settle", flush=True)
+        allocate_mib(warmup_mib)
+        print(f"Warmup: allocated {warmup_mib}MiB, waiting for monitor to settle", flush=True)
         time.sleep(1)
 
         # Фаза 2: burst — резкая аллокация через порог
-        print(f"Burst: allocating {burst_mb}MB...", flush=True)
+        print(f"Burst: allocating {burst_mib}MiB...", flush=True)
         _burst_time = time.monotonic()
-        allocate_mb(burst_mb)
+        allocate_mib(burst_mib)
 
         # Ждём сигнал (с таймаутом)
         time.sleep(5)

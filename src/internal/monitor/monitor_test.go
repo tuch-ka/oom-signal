@@ -207,7 +207,7 @@ func TestReadUsageErrorContinues(t *testing.T) {
 
 func TestAbsoluteThreshold(t *testing.T) {
 	t.Parallel()
-	th, _ := threshold.New("100MB")
+	th, _ := threshold.New("100MiB")
 	limit := uint64(200 * 1024 * 1024)
 	reader := &mockReader{limit: limit, usage: 50 * 1024 * 1024}
 
@@ -225,7 +225,7 @@ func newCalcMonitor(t *testing.T) *Monitor {
 	t.Helper()
 	th, _ := threshold.New("0.8")
 	proc, _ := os.FindProcess(os.Getpid())
-	limit := uint64(100 * 1024 * 1024) // 100 MB
+	limit := uint64(100 * 1024 * 1024) // 100 MiB
 	reader := &mockReader{limit: limit}
 	return New(th, proc, syscall.SIGUSR1, reader, DefaultPollInterval, 0)
 }
@@ -293,7 +293,7 @@ func TestCalcIntervalBetweenThresholds(t *testing.T) {
 func TestCalcIntervalWithCustomPollInterval(t *testing.T) {
 	th, _ := threshold.New("0.8")
 	proc, _ := os.FindProcess(os.Getpid())
-	limit := uint64(100 * 1024 * 1024) // 100 MB
+	limit := uint64(100 * 1024 * 1024) // 100 MiB
 	reader := &mockReader{limit: limit}
 	mon := New(th, proc, syscall.SIGUSR1, reader, 10*time.Millisecond, 0)
 	mon.prevUsage = 10 * 1024 * 1024

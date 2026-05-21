@@ -15,7 +15,7 @@ import (
 
 func main() {
 	th := threshold.Default()
-	flag.Var(&th, "threshold", "Memory threshold: fraction 0.0–1.0 or megabytes e.g. 100MB")
+	flag.Var(&th, "threshold", "Memory threshold: fraction 0.0–1.0 or mebibytes e.g. 100MiB")
 	targetPid := flag.Int("pid", 1, "PID to signal when threshold is exceeded")
 	sigName := flag.String("signal", "SIGUSR1", "Signal to send (e.g. SIGUSR1, SIGTERM, or numeric)")
 	pollInterval := flag.Duration("poll-interval", monitor.DefaultPollInterval, "Base poll interval (minimum 1ms)")
